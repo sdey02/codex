@@ -1,0 +1,27 @@
+name: Sync Fork Main
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-fork-main
+  cancel-in-progress: false
+
+jobs:
+  sync-main:
+    if: github.repository_owner == 'sdey02'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Rebase main onto openai/codex main
+        run: ./scripts/sync-upstream-branch.sh main https://github.com/openai/codex.git
