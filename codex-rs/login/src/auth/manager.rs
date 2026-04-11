@@ -20,6 +20,10 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
 use super::external_bearer::BearerTokenRefresher;
+use crate::auth::accounts::SavedAccountSummary;
+use crate::auth::accounts::list_saved_accounts as list_saved_accounts_from_registry;
+use crate::auth::accounts::switch_saved_account;
+use crate::auth::accounts::upsert_saved_account;
 pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
@@ -468,7 +472,11 @@ pub fn save_auth(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    storage.save(auth)
+    storage.save(auth)?;
+    if let Err(error) = upsert_saved_account(codex_home, auth) {
+        tracing::warn!("failed to update saved account registry: {error}");
+    }
+    Ok(())
 }
 
 /// Load CLI auth data using the configured credential store backend.
@@ -482,6 +490,19 @@ pub fn load_auth_dot_json(
 ) -> std::io::Result<Option<AuthDotJson>> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
     storage.load()
+}
+
+pub fn list_saved_accounts(codex_home: &Path) -> std::io::Result<Vec<SavedAccountSummary>> {
+    list_saved_accounts_from_registry(codex_home)
+}
+
+pub fn switch_active_account(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    account_key: &str,
+) -> std::io::Result<()> {
+    let auth = switch_saved_account(codex_home, account_key)?;
+    save_auth(codex_home, &auth, auth_credentials_store_mode)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

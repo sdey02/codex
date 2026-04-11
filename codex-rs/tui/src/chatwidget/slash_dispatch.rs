@@ -317,6 +317,9 @@ impl ChatWidget {
             SlashCommand::Plugins => {
                 self.add_plugins_output();
             }
+            SlashCommand::Accounts => {
+                self.open_accounts_popup();
+            }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
                     self.add_info_message(
