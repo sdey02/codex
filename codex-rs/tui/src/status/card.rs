@@ -47,6 +47,9 @@ use super::rate_limits::compose_rate_limit_data_many;
 use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use super::remote_connection::RemoteConnectionStatus;
+use super::saved_accounts::SavedAccountsState;
+use super::saved_accounts::collect_saved_account_labels;
+use super::saved_accounts::render_saved_account_lines;
 use super::thread_usage::StatusThreadUsage;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
@@ -81,6 +84,7 @@ struct StatusRateLimitState {
 pub(crate) struct StatusHistoryHandle {
     rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
     thread_usage: StatusThreadUsage,
+    saved_accounts_state: Arc<RwLock<SavedAccountsState>>,
 }
 
 impl StatusHistoryHandle {
@@ -113,6 +117,43 @@ impl StatusHistoryHandle {
     ) {
         self.thread_usage.set_estimate(estimate);
     }
+
+    pub(crate) fn start_saved_accounts_refresh(&self) {
+        #[expect(clippy::expect_used)]
+        let mut state = self
+            .saved_accounts_state
+            .write()
+            .expect("status history saved-accounts state poisoned");
+        *state = SavedAccountsState::Loading;
+    }
+
+    pub(crate) fn finish_saved_accounts_refresh(
+        &self,
+        saved_accounts: Vec<codex_login::SavedAccountStatus>,
+    ) {
+        #[expect(clippy::expect_used)]
+        let mut state = self
+            .saved_accounts_state
+            .write()
+            .expect("status history saved-accounts state poisoned");
+        *state = if saved_accounts
+            .iter()
+            .any(|account| !account.summary.is_active)
+        {
+            SavedAccountsState::Loaded(saved_accounts)
+        } else {
+            SavedAccountsState::Hidden
+        };
+    }
+
+    pub(crate) fn fail_saved_accounts_refresh(&self, error: String) {
+        #[expect(clippy::expect_used)]
+        let mut state = self
+            .saved_accounts_state
+            .write()
+            .expect("status history saved-accounts state poisoned");
+        *state = SavedAccountsState::Failed(error);
+    }
 }
 
 #[derive(Debug)]
@@ -133,6 +174,7 @@ struct StatusHistoryCell {
     token_usage: StatusTokenUsageData,
     rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
     thread_usage: StatusThreadUsage,
+    saved_accounts_state: Arc<RwLock<SavedAccountsState>>,
 }
 
 #[cfg(test)]
@@ -367,6 +409,7 @@ impl StatusHistoryCell {
             rate_limits,
             refreshing_rate_limits,
         }));
+        let saved_accounts_state = Arc::new(RwLock::new(SavedAccountsState::Hidden));
         let agents_summary = Arc::new(RwLock::new(agents_summary));
         let thread_usage = StatusThreadUsage::default();
 
@@ -388,10 +431,12 @@ impl StatusHistoryCell {
                 agents_summary,
                 rate_limit_state: rate_limit_state.clone(),
                 thread_usage: thread_usage.clone(),
+                saved_accounts_state: saved_accounts_state.clone(),
             },
             StatusHistoryHandle {
                 rate_limit_state,
                 thread_usage,
+                saved_accounts_state,
             },
         )
     }
@@ -770,6 +815,12 @@ impl HistoryCell for StatusHistoryCell {
             .read()
             .expect("status history agents summary state poisoned")
             .clone();
+        #[expect(clippy::expect_used)]
+        let saved_accounts_state = self
+            .saved_accounts_state
+            .read()
+            .expect("status history saved accounts state poisoned")
+            .clone();
 
         if self.model_provider.is_some() {
             push_label(&mut labels, &mut seen, "Model provider");
@@ -795,6 +846,7 @@ impl HistoryCell for StatusHistoryCell {
         }
         self.collect_rate_limit_labels(&rate_limit_state, &mut seen, &mut labels);
         self.thread_usage.push_labels(&mut labels, &mut seen);
+        collect_saved_account_labels(&saved_accounts_state, &mut seen, &mut labels);
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
         let value_width = formatter.value_width(available_inner_width);
@@ -888,6 +940,11 @@ impl HistoryCell for StatusHistoryCell {
             lines.push(Line::from(Vec::<Span<'static>>::new()));
             lines.extend(thread_usage_lines);
         }
+        lines.extend(render_saved_account_lines(
+            &saved_accounts_state,
+            available_inner_width,
+            &formatter,
+        ));
 
         let content_width = lines.iter().map(line_width).max().unwrap_or(0);
         let inner_width = content_width.min(available_inner_width);

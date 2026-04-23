@@ -27,6 +27,7 @@ use chrono::Duration as ChronoDuration;
 use chrono::Local;
 use chrono::TimeZone;
 use chrono::Utc;
+use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::CreditsSnapshot;
 use codex_app_server_protocol::RateLimitSnapshot;
@@ -34,11 +35,15 @@ use codex_app_server_protocol::RateLimitWindow;
 use codex_app_server_protocol::SpendControlLimitSnapshot;
 use codex_config::LoaderOverrides;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::SavedAccountRateLimits;
+use codex_login::SavedAccountStatus;
+use codex_login::SavedAccountSummary;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::ThreadId;
+use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ActivePermissionProfile;
@@ -157,6 +162,44 @@ fn set_workspace_cwd(config: &mut Config, cwd: AbsolutePathBuf) {
 
 fn test_status_account_display() -> Option<StatusAccountDisplay> {
     None
+}
+
+fn make_saved_account_status(
+    key: &str,
+    label: &str,
+    auth_mode: ApiAuthMode,
+    is_active: bool,
+    email: Option<&str>,
+    plan_type: Option<codex_protocol::account::PlanType>,
+    rate_limits: SavedAccountRateLimits,
+) -> SavedAccountStatus {
+    SavedAccountStatus {
+        summary: SavedAccountSummary {
+            key: key.to_string(),
+            label: label.to_string(),
+            auth_mode,
+            is_active,
+        },
+        email: email.map(str::to_string),
+        plan_type,
+        rate_limits,
+    }
+}
+
+fn snapshot(percent: f64) -> RateLimitSnapshot {
+    RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: Some(RateLimitWindow {
+            used_percent: percent,
+            window_minutes: Some(60),
+            resets_at: None,
+        }),
+        secondary: None,
+        credits: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    }
 }
 
 fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> TokenUsageInfo {
@@ -2204,4 +2247,99 @@ async fn status_context_window_uses_last_usage() {
         !context_line.contains("102K"),
         "context line should not use total aggregated tokens, got: {context_line}"
     );
+}
+
+#[tokio::test]
+async fn status_snapshot_includes_other_saved_accounts() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.1-codex-max".to_string());
+    config.model_provider_id = "openai".to_string();
+    config.cwd = test_path_buf("/workspace/tests").abs();
+
+    let account_display = Some(StatusAccountDisplay::ChatGpt {
+        email: Some("active@example.com".to_string()),
+        plan: Some("Pro".to_string()),
+    });
+    let usage = TokenUsage {
+        input_tokens: 800,
+        cached_input_tokens: 0,
+        output_tokens: 400,
+        reasoning_output_tokens: 0,
+        total_tokens: 1_200,
+    };
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 7, 8, 9, 10, 11)
+        .single()
+        .expect("timestamp");
+    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let token_info = token_info_for(&model_slug, &config, &usage);
+    let (composite, handle) = new_status_output_with_rate_limits_handle(
+        &config,
+        account_display.as_ref(),
+        Some(&token_info),
+        &usage,
+        &None,
+        /*thread_name*/ None,
+        /*forked_from*/ None,
+        &[],
+        None,
+        captured_at,
+        &model_slug,
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        "<none>".to_string(),
+        /*refreshing_rate_limits*/ false,
+    );
+    handle.finish_saved_accounts_refresh(vec![
+        make_saved_account_status(
+            "chatgpt:active",
+            "active@example.com",
+            ApiAuthMode::Chatgpt,
+            /*is_active*/ true,
+            Some("active@example.com"),
+            Some(PlanType::Pro),
+            SavedAccountRateLimits::Available(vec![snapshot(/*percent*/ 35.0)]),
+        ),
+        make_saved_account_status(
+            "chatgpt:plus",
+            "plus@example.com",
+            ApiAuthMode::Chatgpt,
+            /*is_active*/ false,
+            Some("plus@example.com"),
+            Some(PlanType::Plus),
+            SavedAccountRateLimits::Available(vec![snapshot(/*percent*/ 72.0)]),
+        ),
+        make_saved_account_status(
+            "api:key",
+            "API key (...9999)",
+            ApiAuthMode::ApiKey,
+            /*is_active*/ false,
+            None,
+            None,
+            SavedAccountRateLimits::Unsupported {
+                reason: "limits unavailable for API key auth".to_string(),
+            },
+        ),
+        make_saved_account_status(
+            "chatgpt:failed",
+            "error@example.com",
+            ApiAuthMode::Chatgpt,
+            /*is_active*/ false,
+            Some("error@example.com"),
+            Some(PlanType::Free),
+            SavedAccountRateLimits::Unavailable {
+                error: "request timed out".to_string(),
+            },
+        ),
+    ]);
+
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 100));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
 }

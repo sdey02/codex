@@ -1508,6 +1508,16 @@ impl App {
             AppEvent::CommitPendingUsageOutputAfterStreamShutdown => {
                 self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
+            AppEvent::SavedAccountStatusesLoaded { request_id, result } => match result {
+                Ok(saved_accounts) => {
+                    self.chat_widget
+                        .finish_status_saved_accounts_refresh(request_id, saved_accounts);
+                }
+                Err(error) => {
+                    self.chat_widget
+                        .fail_status_saved_accounts_refresh(request_id, error);
+                }
+            },
             AppEvent::ConnectorsLoaded {
                 thread_id,
                 cwd,
@@ -1640,6 +1650,13 @@ impl App {
                     );
                 }
             }
+            AppEvent::OpenAccountActionsPopup { account_key } => {
+                self.chat_widget.open_account_actions_popup(account_key);
+            }
+            AppEvent::OpenRemoveAccountConfirmation { account_key } => {
+                self.chat_widget
+                    .open_remove_account_confirmation(account_key);
+            }
             AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
                 self.chat_widget
                     .open_plan_reasoning_scope_prompt(model, effort);
@@ -1709,6 +1726,9 @@ impl App {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
                     self.launch_external_editor(tui).await;
                 }
+            }
+            AppEvent::DismissBottomPaneViews => {
+                self.chat_widget.dismiss_bottom_pane_views();
             }
             AppEvent::OpenWindowsSandboxEnablePrompt {
                 preset,

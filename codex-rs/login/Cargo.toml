@@ -11,6 +11,9 @@ workspace = true
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-agent-identity = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-backend-openapi-models = { path = "../codex-backend-openapi-models" }
+codex-client = { workspace = true }
 codex-http-client = { workspace = true }
 codex-config = { workspace = true }
 codex-keyring-store = { workspace = true }
@@ -36,6 +39,7 @@ tokio = { workspace = true, features = [
     "process",
     "rt-multi-thread",
     "signal",
+    "time",
 ] }
 tracing = { workspace = true }
 url = { workspace = true }

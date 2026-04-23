@@ -460,18 +460,16 @@ impl ChatWidget {
                 self.add_hooks_output();
             }
             SlashCommand::Status => {
+                let request_id = self.next_status_refresh_request_id;
+                self.next_status_refresh_request_id =
+                    self.next_status_refresh_request_id.wrapping_add(1);
                 if self.should_prefetch_rate_limits() {
-                    let request_id = self.next_status_refresh_request_id;
-                    self.next_status_refresh_request_id =
-                        self.next_status_refresh_request_id.wrapping_add(1);
                     self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
                     self.app_event_tx.send(AppEvent::RefreshRateLimits {
                         origin: RateLimitRefreshOrigin::StatusCommand { request_id },
                     });
                 } else {
-                    self.add_status_output(
-                        /*refreshing_rate_limits*/ false, /*request_id*/ None,
-                    );
+                    self.add_status_output(/*refreshing_rate_limits*/ false, Some(request_id));
                 }
             }
             SlashCommand::Cd => {
@@ -490,6 +488,9 @@ impl ChatWidget {
             }
             SlashCommand::Ide => {
                 self.handle_ide_command();
+            }
+            SlashCommand::Accounts => {
+                self.open_accounts_popup();
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
@@ -1171,6 +1172,7 @@ impl ChatWidget {
             | SlashCommand::Review
             | SlashCommand::Model
             | SlashCommand::Personality
+            | SlashCommand::Accounts
             | SlashCommand::Plan
             | SlashCommand::Goal
             | SlashCommand::Side

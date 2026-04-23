@@ -603,6 +603,12 @@ pub(crate) enum AppEvent {
     /// Commit settled asynchronous usage output after stream shutdown.
     CommitPendingUsageOutputAfterStreamShutdown,
 
+    /// Result of loading saved-account status for a specific `/status` card.
+    SavedAccountStatusesLoaded {
+        request_id: u64,
+        result: Result<Vec<codex_login::SavedAccountStatus>, String>,
+    },
+
     /// Send a user-confirmed request to notify the workspace owner.
     SendAddCreditsNudgeEmail {
         credit_type: AddCreditsNudgeCreditType,
@@ -1015,6 +1021,16 @@ pub(crate) enum AppEvent {
     ApplyAdvancedReasoning {
         model: String,
         effort: ReasoningEffort,
+    },
+
+    /// Open account actions for the selected saved account.
+    OpenAccountActionsPopup {
+        account_key: String,
+    },
+
+    /// Open a destructive confirmation popup before removing a saved account.
+    OpenRemoveAccountConfirmation {
+        account_key: String,
     },
 
     /// Open the Plan-mode reasoning scope prompt for the selected model/effort.

@@ -1,4 +1,5 @@
 mod access_token;
+mod accounts;
 mod agent_identity;
 mod auth_headers;
 mod bedrock_access_keys;
@@ -14,6 +15,8 @@ mod external_bearer;
 mod manager;
 mod revoke;
 
+pub use accounts::SavedAccountRateLimits;
+pub use accounts::SavedAccountStatus;
 pub use auth_headers::AuthHeaders;
 pub use bedrock_access_keys::BedrockAccessKeysAuth;
 pub use bedrock_access_keys::login_with_bedrock_access_keys;

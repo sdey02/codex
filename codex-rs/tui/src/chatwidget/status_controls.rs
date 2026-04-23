@@ -250,6 +250,29 @@ impl ChatWidget {
         if let Some(request_id) = request_id {
             self.refreshing_status_outputs
                 .push((request_id, handle.clone()));
+            match codex_login::list_saved_accounts(&self.config.codex_home) {
+                Ok(saved_accounts) if saved_accounts.iter().any(|account| !account.is_active) => {
+                    handle.start_saved_accounts_refresh();
+                    self.refreshing_saved_account_status_outputs
+                        .push((request_id, handle.clone()));
+                    let tx = self.app_event_tx.clone();
+                    let codex_home = self.config.codex_home.clone();
+                    let chatgpt_base_url = Some(self.config.chatgpt_base_url.clone());
+                    tokio::spawn(async move {
+                        let result =
+                            codex_login::list_saved_account_statuses(&codex_home, chatgpt_base_url)
+                                .await
+                                .map_err(|error| error.to_string());
+                        tx.send(AppEvent::SavedAccountStatusesLoaded { request_id, result });
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    handle.fail_saved_accounts_refresh(format!(
+                        "failed to read saved accounts: {error}"
+                    ));
+                }
+            }
         }
         if self.thread_usage_is_available() {
             handle.reserve_thread_usage_label_width();
@@ -295,6 +318,52 @@ impl ChatWidget {
             }
         }
         self.refreshing_status_outputs = remaining;
+        if updated_any {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn finish_status_saved_accounts_refresh(
+        &mut self,
+        request_id: u64,
+        saved_accounts: Vec<codex_login::SavedAccountStatus>,
+    ) {
+        if self.refreshing_saved_account_status_outputs.is_empty() {
+            return;
+        }
+
+        let mut remaining = Vec::with_capacity(self.refreshing_saved_account_status_outputs.len());
+        let mut updated_any = false;
+        for (pending_request_id, handle) in self.refreshing_saved_account_status_outputs.drain(..) {
+            if pending_request_id == request_id {
+                updated_any = true;
+                handle.finish_saved_accounts_refresh(saved_accounts.clone());
+            } else {
+                remaining.push((pending_request_id, handle));
+            }
+        }
+        self.refreshing_saved_account_status_outputs = remaining;
+        if updated_any {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn fail_status_saved_accounts_refresh(&mut self, request_id: u64, error: String) {
+        if self.refreshing_saved_account_status_outputs.is_empty() {
+            return;
+        }
+
+        let mut remaining = Vec::with_capacity(self.refreshing_saved_account_status_outputs.len());
+        let mut updated_any = false;
+        for (pending_request_id, handle) in self.refreshing_saved_account_status_outputs.drain(..) {
+            if pending_request_id == request_id {
+                updated_any = true;
+                handle.fail_saved_accounts_refresh(error.clone());
+            } else {
+                remaining.push((pending_request_id, handle));
+            }
+        }
+        self.refreshing_saved_account_status_outputs = remaining;
         if updated_any {
             self.request_redraw();
         }

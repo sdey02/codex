@@ -28,6 +28,14 @@ use codex_protocol::config_types::ModelProviderAuthInfo;
 
 use super::access_token::CodexAccessToken;
 use super::access_token::classify_codex_access_token;
+use super::accounts::RemoveSavedAccountResultInternal;
+pub use super::accounts::SavedAccountStatus;
+pub use super::accounts::SavedAccountSummary;
+use super::accounts::list_saved_account_statuses as list_saved_account_statuses_from_registry;
+use super::accounts::list_saved_accounts as list_saved_accounts_from_registry;
+use super::accounts::remove_saved_account as remove_saved_account_from_registry;
+use super::accounts::switch_saved_account;
+use super::accounts::upsert_saved_account;
 use super::agent_identity::ManagedChatGptAgentIdentityBinding;
 use super::agent_identity::agent_identity_authapi_base_url;
 use super::agent_identity::classify_bootstrap_error;
@@ -251,6 +259,21 @@ pub struct ExternalAuthRefreshContext {
     pub previous_account_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoveSavedAccountResult {
+    RemovedInactive {
+        removed_label: String,
+    },
+    RemovedActiveSwitched {
+        removed_label: String,
+        replacement_label: String,
+    },
+    RemovedLastActive {
+        removed_label: String,
+    },
+}
+
+#[async_trait]
 /// Pluggable auth provider used by `AuthManager` for externally managed auth flows.
 ///
 /// Implementations own the current auth value and any source-specific refresh mechanism.
@@ -1114,7 +1137,11 @@ pub fn save_auth(
         auth_credentials_store_mode,
         keyring_backend_kind,
     );
-    storage.save(auth)
+    storage.save(auth)?;
+    if let Err(error) = upsert_saved_account(codex_home, auth) {
+        tracing::warn!("failed to update saved account registry: {error}");
+    }
+    Ok(())
 }
 
 /// Load the raw stored auth payload without applying environment overrides.
@@ -1133,6 +1160,73 @@ pub fn load_auth_dot_json(
         keyring_backend_kind,
     );
     storage.load()
+}
+
+pub fn list_saved_accounts(codex_home: &Path) -> std::io::Result<Vec<SavedAccountSummary>> {
+    list_saved_accounts_from_registry(codex_home)
+}
+
+pub async fn list_saved_account_statuses(
+    codex_home: &Path,
+    chatgpt_base_url: Option<String>,
+) -> std::io::Result<Vec<SavedAccountStatus>> {
+    list_saved_account_statuses_from_registry(codex_home, chatgpt_base_url).await
+}
+
+pub fn switch_active_account(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    account_key: &str,
+) -> std::io::Result<()> {
+    if auth_credentials_store_mode != AuthCredentialsStoreMode::Ephemeral {
+        let _ = logout(codex_home, AuthCredentialsStoreMode::Ephemeral)?;
+    }
+    let auth = switch_saved_account(codex_home, account_key)?;
+    save_auth(
+        codex_home,
+        &auth,
+        auth_credentials_store_mode,
+        AuthKeyringBackendKind::default(),
+    )
+}
+
+pub fn remove_saved_account(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    account_key: &str,
+) -> std::io::Result<RemoveSavedAccountResult> {
+    match remove_saved_account_from_registry(codex_home, account_key)? {
+        RemoveSavedAccountResultInternal::Inactive { removed } => {
+            Ok(RemoveSavedAccountResult::RemovedInactive {
+                removed_label: removed.label,
+            })
+        }
+        RemoveSavedAccountResultInternal::ActiveSwitched {
+            removed,
+            replacement,
+            replacement_auth,
+        } => {
+            if auth_credentials_store_mode != AuthCredentialsStoreMode::Ephemeral {
+                let _ = logout(codex_home, AuthCredentialsStoreMode::Ephemeral)?;
+            }
+            save_auth(
+                codex_home,
+                &replacement_auth,
+                auth_credentials_store_mode,
+                AuthKeyringBackendKind::default(),
+            )?;
+            Ok(RemoveSavedAccountResult::RemovedActiveSwitched {
+                removed_label: removed.label,
+                replacement_label: replacement.label,
+            })
+        }
+        RemoveSavedAccountResultInternal::LastActive { removed } => {
+            let _ = logout_all_stores(codex_home, auth_credentials_store_mode)?;
+            Ok(RemoveSavedAccountResult::RemovedLastActive {
+                removed_label: removed.label,
+            })
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

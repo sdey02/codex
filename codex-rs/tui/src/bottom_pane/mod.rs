@@ -1329,6 +1329,15 @@ impl BottomPane {
         true
     }
 
+    pub(crate) fn clear_selection_views(&mut self) {
+        if self.view_stack.is_empty() {
+            return;
+        }
+        self.view_stack.clear();
+        self.on_view_stack_depth_decreased();
+        self.request_redraw();
+    }
+
     pub(crate) fn selected_index_for_active_view(&self, view_id: &'static str) -> Option<usize> {
         self.view_stack
             .last()
