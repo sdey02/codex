@@ -504,6 +504,16 @@ impl App {
                     }
                 }
             },
+            AppEvent::SavedAccountStatusesLoaded { request_id, result } => match result {
+                Ok(saved_accounts) => {
+                    self.chat_widget
+                        .finish_status_saved_accounts_refresh(request_id, saved_accounts);
+                }
+                Err(error) => {
+                    self.chat_widget
+                        .fail_status_saved_accounts_refresh(request_id, error);
+                }
+            },
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
@@ -533,6 +543,13 @@ impl App {
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
+            }
+            AppEvent::OpenAccountActionsPopup { account_key } => {
+                self.chat_widget.open_account_actions_popup(account_key);
+            }
+            AppEvent::OpenRemoveAccountConfirmation { account_key } => {
+                self.chat_widget
+                    .open_remove_account_confirmation(account_key);
             }
             AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
                 self.chat_widget
@@ -591,6 +608,9 @@ impl App {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
                     self.launch_external_editor(tui).await;
                 }
+            }
+            AppEvent::DismissBottomPaneViews => {
+                self.chat_widget.dismiss_bottom_pane_views();
             }
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);

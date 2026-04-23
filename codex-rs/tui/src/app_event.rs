@@ -193,6 +193,12 @@ pub(crate) enum AppEvent {
         result: Result<Vec<RateLimitSnapshot>, String>,
     },
 
+    /// Result of loading saved-account status for a specific `/status` card.
+    SavedAccountStatusesLoaded {
+        request_id: u64,
+        result: Result<Vec<codex_login::SavedAccountStatus>, String>,
+    },
+
     /// Send a user-confirmed request to notify the workspace owner.
     SendAddCreditsNudgeEmail {
         credit_type: AddCreditsNudgeCreditType,
@@ -414,6 +420,9 @@ pub(crate) enum AppEvent {
         kind: RealtimeAudioDeviceKind,
     },
 
+    /// Dismiss all stacked bottom-pane views/popups.
+    DismissBottomPaneViews,
+
     /// Result of creating a TUI-owned realtime WebRTC offer.
     RealtimeWebrtcOfferCreated {
         result: Result<RealtimeWebrtcOffer, String>,
@@ -428,6 +437,16 @@ pub(crate) enum AppEvent {
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
+    },
+
+    /// Open account actions for the selected saved account.
+    OpenAccountActionsPopup {
+        account_key: String,
+    },
+
+    /// Open a destructive confirmation popup before removing a saved account.
+    OpenRemoveAccountConfirmation {
+        account_key: String,
     },
 
     /// Open the Plan-mode reasoning scope prompt for the selected model/effort.

@@ -363,6 +363,7 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+mod accounts;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod session_header;
@@ -791,6 +792,7 @@ pub(crate) struct ChatWidget {
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
+    refreshing_saved_account_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
     plan_type: Option<PlanType>,
     codex_rate_limit_reached_type: Option<RateLimitReachedType>,
@@ -5136,6 +5138,7 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             refreshing_status_outputs: Vec::new(),
+            refreshing_saved_account_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
             plan_type: initial_plan_type,
             codex_rate_limit_reached_type: None,
@@ -5513,6 +5516,11 @@ impl ChatWidget {
 
     pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
         self.bottom_pane.show_selection_view(params);
+        self.request_redraw();
+    }
+
+    pub(crate) fn dismiss_bottom_pane_views(&mut self) {
+        self.bottom_pane.clear_selection_views();
         self.request_redraw();
     }
 
@@ -7605,8 +7613,34 @@ impl ChatWidget {
             agents_summary,
             refreshing_rate_limits,
         );
+        if refreshing_rate_limits && let Some(request_id) = request_id {
+            self.refreshing_status_outputs
+                .push((request_id, handle.clone()));
+        }
         if let Some(request_id) = request_id {
-            self.refreshing_status_outputs.push((request_id, handle));
+            match codex_login::list_saved_accounts(&self.config.codex_home) {
+                Ok(saved_accounts) if saved_accounts.iter().any(|account| !account.is_active) => {
+                    handle.start_saved_accounts_refresh();
+                    self.refreshing_saved_account_status_outputs
+                        .push((request_id, handle));
+                    let tx = self.app_event_tx.clone();
+                    let codex_home = self.config.codex_home.clone();
+                    let chatgpt_base_url = Some(self.config.chatgpt_base_url.clone());
+                    tokio::spawn(async move {
+                        let result =
+                            codex_login::list_saved_account_statuses(&codex_home, chatgpt_base_url)
+                                .await
+                                .map_err(|error| error.to_string());
+                        tx.send(AppEvent::SavedAccountStatusesLoaded { request_id, result });
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    handle.fail_saved_accounts_refresh(format!(
+                        "failed to read saved accounts: {error}"
+                    ));
+                }
+            }
         }
         self.add_to_history(cell);
     }
@@ -7633,6 +7667,52 @@ impl ChatWidget {
             }
         }
         self.refreshing_status_outputs = remaining;
+        if updated_any {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn finish_status_saved_accounts_refresh(
+        &mut self,
+        request_id: u64,
+        saved_accounts: Vec<codex_login::SavedAccountStatus>,
+    ) {
+        if self.refreshing_saved_account_status_outputs.is_empty() {
+            return;
+        }
+
+        let mut remaining = Vec::with_capacity(self.refreshing_saved_account_status_outputs.len());
+        let mut updated_any = false;
+        for (pending_request_id, handle) in self.refreshing_saved_account_status_outputs.drain(..) {
+            if pending_request_id == request_id {
+                updated_any = true;
+                handle.finish_saved_accounts_refresh(saved_accounts.clone());
+            } else {
+                remaining.push((pending_request_id, handle));
+            }
+        }
+        self.refreshing_saved_account_status_outputs = remaining;
+        if updated_any {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn fail_status_saved_accounts_refresh(&mut self, request_id: u64, error: String) {
+        if self.refreshing_saved_account_status_outputs.is_empty() {
+            return;
+        }
+
+        let mut remaining = Vec::with_capacity(self.refreshing_saved_account_status_outputs.len());
+        let mut updated_any = false;
+        for (pending_request_id, handle) in self.refreshing_saved_account_status_outputs.drain(..) {
+            if pending_request_id == request_id {
+                updated_any = true;
+                handle.fail_saved_accounts_refresh(error.clone());
+            } else {
+                remaining.push((pending_request_id, handle));
+            }
+        }
+        self.refreshing_saved_account_status_outputs = remaining;
         if updated_any {
             self.request_redraw();
         }

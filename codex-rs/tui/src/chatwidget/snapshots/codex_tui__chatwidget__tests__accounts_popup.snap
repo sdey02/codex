@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/accounts.rs
+expression: popup
+---
+  Accounts
+  Switch the active account, remove a saved login, or add another account
+
+› 1. API key (...2222) (current)  Currently active account
+  2. API key (...1111)            API key
+  3. Add account                  Sign in with another account in your browser
+
+  Press enter to confirm or esc to go back
