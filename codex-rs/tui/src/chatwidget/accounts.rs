@@ -1,0 +1,323 @@
+use codex_app_server_protocol::AuthMode as ApiAuthMode;
+use codex_protocol::config_types::ForcedLoginMethod;
+
+use super::*;
+
+impl ChatWidget {
+    pub(crate) fn open_accounts_popup(&mut self) {
+        let saved_accounts = match codex_login::list_saved_accounts(&self.config.codex_home) {
+            Ok(accounts) => accounts,
+            Err(error) => {
+                self.add_error_message(format!("Failed to load saved accounts: {error}"));
+                return;
+            }
+        };
+
+        let mut items: Vec<SelectionItem> = saved_accounts
+            .into_iter()
+            .map(|account| {
+                let account_key = account.key.clone();
+                SelectionItem {
+                    name: account.label,
+                    description: Some(saved_account_mode_label(account.auth_mode).to_string()),
+                    selected_description: account
+                        .is_active
+                        .then(|| "Currently active account".to_string()),
+                    is_current: account.is_active,
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::OpenAccountActionsPopup {
+                            account_key: account_key.clone(),
+                        });
+                    })],
+                    dismiss_on_select: false,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        items.push(add_account_item(
+            self.config.codex_home.to_path_buf(),
+            self.config.forced_chatgpt_workspace_id.clone(),
+            self.config.forced_login_method,
+            self.config.cli_auth_credentials_store_mode,
+        ));
+
+        self.show_selection_view(SelectionViewParams {
+            view_id: Some("accounts-popup"),
+            title: Some("Accounts".to_string()),
+            subtitle: Some(
+                "Switch the active account, remove a saved login, or add another account"
+                    .to_string(),
+            ),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_account_actions_popup(&mut self, account_key: String) {
+        let saved_accounts = match codex_login::list_saved_accounts(&self.config.codex_home) {
+            Ok(accounts) => accounts,
+            Err(error) => {
+                self.add_error_message(format!("Failed to load saved accounts: {error}"));
+                return;
+            }
+        };
+        let Some(account) = saved_accounts
+            .into_iter()
+            .find(|account| account.key == account_key)
+        else {
+            self.add_error_message("Saved account no longer exists.".to_string());
+            return;
+        };
+
+        let switch_account_key = account.key.clone();
+        let switch_account_label = account.label.clone();
+        let switch_codex_home = self.config.codex_home.clone();
+        let switch_credentials_store_mode = self.config.cli_auth_credentials_store_mode;
+        let switch_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            match codex_login::switch_active_account(
+                &switch_codex_home,
+                switch_credentials_store_mode,
+                switch_account_key.as_str(),
+            ) {
+                Ok(()) => {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_info_event(
+                            format!(
+                                "Switched active account to {switch_account_label}. Restarting Codex."
+                            ),
+                            /*hint*/ None,
+                        ),
+                    )));
+                    tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
+                }
+                Err(error) => {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(format!(
+                            "Failed to switch account to {switch_account_label}: {error}"
+                        )),
+                    )));
+                }
+            }
+        })];
+
+        let remove_account_key = account.key.clone();
+        let remove_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::OpenRemoveAccountConfirmation {
+                account_key: remove_account_key.clone(),
+            });
+        })];
+
+        let items = vec![
+            SelectionItem {
+                name: format!("Switch to {}", account.label),
+                description: Some("Make this the active account".to_string()),
+                selected_description: account
+                    .is_active
+                    .then(|| "This account is already active".to_string()),
+                is_disabled: account.is_active,
+                disabled_reason: account.is_active.then(|| "Already active".to_string()),
+                actions: switch_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: format!("Remove {}", account.label),
+                description: Some("Delete this saved login from /accounts".to_string()),
+                actions: remove_actions,
+                dismiss_on_select: false,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Back".to_string(),
+                description: Some("Return to the accounts list".to_string()),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.show_selection_view(SelectionViewParams {
+            view_id: Some("account-actions-popup"),
+            title: Some("Account".to_string()),
+            subtitle: Some(account.label),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx: Some(if account.is_active { 1 } else { 0 }),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_remove_account_confirmation(&mut self, account_key: String) {
+        let saved_accounts = match codex_login::list_saved_accounts(&self.config.codex_home) {
+            Ok(accounts) => accounts,
+            Err(error) => {
+                self.add_error_message(format!("Failed to load saved accounts: {error}"));
+                return;
+            }
+        };
+        let Some(account) = saved_accounts
+            .into_iter()
+            .find(|account| account.key == account_key)
+        else {
+            self.add_error_message("Saved account no longer exists.".to_string());
+            return;
+        };
+
+        let remove_codex_home = self.config.codex_home.clone();
+        let remove_credentials_store_mode = self.config.cli_auth_credentials_store_mode;
+        let remove_account_key = account.key.clone();
+        let remove_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            match codex_login::remove_saved_account(
+                &remove_codex_home,
+                remove_credentials_store_mode,
+                remove_account_key.as_str(),
+            ) {
+                Ok(codex_login::RemoveSavedAccountResult::RemovedInactive { removed_label }) => {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_info_event(
+                            format!("Removed saved account {removed_label}."),
+                            /*hint*/ None,
+                        ),
+                    )));
+                    tx.send(AppEvent::DismissBottomPaneViews);
+                }
+                Ok(codex_login::RemoveSavedAccountResult::RemovedActiveSwitched {
+                    removed_label,
+                    replacement_label,
+                }) => {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_info_event(
+                            format!(
+                                "Removed {removed_label}. Switched active account to {replacement_label}. Restarting Codex."
+                            ),
+                            /*hint*/ None,
+                        ),
+                    )));
+                    tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
+                }
+                Ok(codex_login::RemoveSavedAccountResult::RemovedLastActive { removed_label }) => {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_info_event(
+                            format!(
+                                "Removed {removed_label}. No saved accounts remain. Logging out and restarting Codex."
+                            ),
+                            /*hint*/ None,
+                        ),
+                    )));
+                    tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
+                }
+                Err(error) => {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(format!(
+                            "Failed to remove saved account: {error}"
+                        )),
+                    )));
+                }
+            }
+        })];
+
+        let items = vec![
+            SelectionItem {
+                name: "Remove account".to_string(),
+                description: Some(if account.is_active {
+                    "Remove this active account and restart Codex".to_string()
+                } else {
+                    "Remove this saved account".to_string()
+                }),
+                actions: remove_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Cancel".to_string(),
+                description: Some("Keep this saved account".to_string()),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.show_selection_view(SelectionViewParams {
+            view_id: Some("remove-account-confirmation-popup"),
+            title: Some("Remove account?".to_string()),
+            subtitle: Some(account.label),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+}
+
+fn add_account_item(
+    codex_home: PathBuf,
+    forced_chatgpt_workspace_id: Option<String>,
+    forced_login_method: Option<ForcedLoginMethod>,
+    credentials_store_mode: codex_login::AuthCredentialsStoreMode,
+) -> SelectionItem {
+    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+        if matches!(forced_login_method, Some(ForcedLoginMethod::Api)) {
+            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_error_event(
+                    "This environment requires API key login. Use `printenv OPENAI_API_KEY | codex login --with-api-key` in a terminal."
+                        .to_string(),
+                ),
+            )));
+            return;
+        }
+
+        tx.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::new_info_event(
+                "Opening browser login to add another account...".to_string(),
+                /*hint*/ None,
+            ),
+        )));
+
+        let tx = tx.clone();
+        let codex_home = codex_home.clone();
+        let forced_chatgpt_workspace_id = forced_chatgpt_workspace_id.clone();
+        tokio::spawn(async move {
+            let opts = codex_login::ServerOptions::new(
+                codex_home,
+                codex_login::CLIENT_ID.to_string(),
+                forced_chatgpt_workspace_id,
+                credentials_store_mode,
+            );
+            let result = match codex_login::run_login_server(opts) {
+                Ok(server) => server.block_until_done().await,
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(()) => {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(history_cell::new_info_event(
+                        "Account login complete. The new account is now active. Restarting Codex."
+                            .to_string(),
+                        /*hint*/ None,
+                    ))));
+                    tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
+                }
+                Err(error) => {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(format!("Account login failed: {error}")),
+                    )));
+                }
+            }
+        });
+    })];
+
+    SelectionItem {
+        name: "Add account".to_string(),
+        description: Some("Sign in with another account in your browser".to_string()),
+        actions,
+        dismiss_on_select: true,
+        ..Default::default()
+    }
+}
+
+fn saved_account_mode_label(auth_mode: ApiAuthMode) -> &'static str {
+    match auth_mode {
+        ApiAuthMode::ApiKey => "API key",
+        ApiAuthMode::Chatgpt => "ChatGPT",
+        ApiAuthMode::ChatgptAuthTokens => "ChatGPT (external)",
+        ApiAuthMode::AgentIdentity => "Agent identity",
+    }
+}

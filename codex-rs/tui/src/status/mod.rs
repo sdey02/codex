@@ -11,6 +11,7 @@ mod card;
 mod format;
 mod helpers;
 mod rate_limits;
+mod saved_accounts;
 
 pub(crate) use account::StatusAccountDisplay;
 pub(crate) use card::StatusHistoryHandle;

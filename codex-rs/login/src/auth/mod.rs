@@ -1,3 +1,4 @@
+mod accounts;
 mod agent_identity;
 pub mod default_client;
 pub mod error;
@@ -8,6 +9,8 @@ mod external_bearer;
 mod manager;
 mod revoke;
 
+pub use accounts::SavedAccountRateLimits;
+pub use accounts::SavedAccountStatus;
 pub use error::RefreshTokenFailedError;
 pub use error::RefreshTokenFailedReason;
 pub use manager::*;

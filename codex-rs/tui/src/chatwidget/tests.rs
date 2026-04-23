@@ -221,6 +221,7 @@ macro_rules! assert_chatwidget_snapshot {
     }};
 }
 
+mod accounts;
 mod app_server;
 mod approval_requests;
 mod composer_submission;
