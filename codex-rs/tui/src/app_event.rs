@@ -609,6 +609,11 @@ pub(crate) enum AppEvent {
         result: Result<Vec<codex_login::SavedAccountStatus>, String>,
     },
 
+    /// Result of loading saved-account status for the `/accounts` popup.
+    AccountsPopupStatusesLoaded {
+        result: Result<Vec<codex_login::SavedAccountStatus>, String>,
+    },
+
     /// Send a user-confirmed request to notify the workspace owner.
     SendAddCreditsNudgeEmail {
         credit_type: AddCreditsNudgeCreditType,

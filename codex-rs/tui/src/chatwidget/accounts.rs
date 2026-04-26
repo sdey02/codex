@@ -3,6 +3,8 @@ use codex_protocol::config_types::ForcedLoginMethod;
 
 use super::*;
 
+const ACCOUNTS_POPUP_VIEW_ID: &str = "accounts-popup";
+
 impl ChatWidget {
     pub(crate) fn open_accounts_popup(&mut self) {
         let saved_accounts = match codex_login::list_saved_accounts(&self.config.codex_home) {
@@ -13,46 +15,52 @@ impl ChatWidget {
             }
         };
 
-        let mut items: Vec<SelectionItem> = saved_accounts
-            .into_iter()
-            .map(|account| {
-                let account_key = account.key.clone();
-                SelectionItem {
-                    name: account.label,
-                    description: Some(saved_account_mode_label(account.auth_mode).to_string()),
-                    selected_description: account
-                        .is_active
-                        .then(|| "Currently active account".to_string()),
-                    is_current: account.is_active,
-                    actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::OpenAccountActionsPopup {
-                            account_key: account_key.clone(),
-                        });
-                    })],
-                    dismiss_on_select: false,
-                    ..Default::default()
-                }
-            })
-            .collect();
-
-        items.push(add_account_item(
-            self.config.codex_home.to_path_buf(),
-            self.config.forced_chatgpt_workspace_id.clone(),
-            self.config.forced_login_method,
-            self.config.cli_auth_credentials_store_mode,
+        let should_load_statuses = !saved_accounts.is_empty();
+        self.show_selection_view(self.accounts_popup_params(
+            saved_accounts,
+            AccountsPopupStatusState::Loading,
+            /*initial_selected_idx*/ None,
         ));
 
-        self.show_selection_view(SelectionViewParams {
-            view_id: Some("accounts-popup"),
-            title: Some("Accounts".to_string()),
-            subtitle: Some(
-                "Switch the active account, remove a saved login, or add another account"
-                    .to_string(),
-            ),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            ..Default::default()
-        });
+        if should_load_statuses {
+            self.load_accounts_popup_statuses();
+        }
+    }
+
+    pub(crate) fn finish_accounts_popup_status_refresh(
+        &mut self,
+        saved_accounts: Vec<codex_login::SavedAccountStatus>,
+    ) {
+        let initial_selected_idx = self
+            .bottom_pane
+            .selected_index_for_active_view(ACCOUNTS_POPUP_VIEW_ID);
+        let params = self.accounts_popup_params(
+            saved_accounts,
+            AccountsPopupStatusState::Loaded,
+            initial_selected_idx,
+        );
+        self.bottom_pane
+            .replace_selection_view_if_active(ACCOUNTS_POPUP_VIEW_ID, params);
+    }
+
+    pub(crate) fn fail_accounts_popup_status_refresh(&mut self, error: String) {
+        let saved_accounts = match codex_login::list_saved_accounts(&self.config.codex_home) {
+            Ok(accounts) => accounts,
+            Err(error) => {
+                self.add_error_message(format!("Failed to load saved accounts: {error}"));
+                return;
+            }
+        };
+        let initial_selected_idx = self
+            .bottom_pane
+            .selected_index_for_active_view(ACCOUNTS_POPUP_VIEW_ID);
+        let params = self.accounts_popup_params(
+            saved_accounts,
+            AccountsPopupStatusState::Failed(error),
+            initial_selected_idx,
+        );
+        self.bottom_pane
+            .replace_selection_view_if_active(ACCOUNTS_POPUP_VIEW_ID, params);
     }
 
     pub(crate) fn open_account_actions_popup(&mut self, account_key: String) {
@@ -245,6 +253,156 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+}
+
+trait AccountsPopupAccount {
+    fn summary(&self) -> &codex_login::SavedAccountSummary;
+    fn status_description(&self, state: &AccountsPopupStatusState) -> String;
+    fn display_name(&self) -> String;
+}
+
+impl AccountsPopupAccount for codex_login::SavedAccountSummary {
+    fn summary(&self) -> &codex_login::SavedAccountSummary {
+        self
+    }
+
+    fn status_description(&self, state: &AccountsPopupStatusState) -> String {
+        match state {
+            AccountsPopupStatusState::Loading => "loading limits...".to_string(),
+            AccountsPopupStatusState::Loaded => {
+                saved_account_mode_label(self.auth_mode).to_string()
+            }
+            AccountsPopupStatusState::Failed(error) => format!("failed to load limits: {error}"),
+        }
+    }
+
+    fn display_name(&self) -> String {
+        self.label.clone()
+    }
+}
+
+impl AccountsPopupAccount for codex_login::SavedAccountStatus {
+    fn summary(&self) -> &codex_login::SavedAccountSummary {
+        &self.summary
+    }
+
+    fn status_description(&self, _state: &AccountsPopupStatusState) -> String {
+        match &self.rate_limits {
+            codex_login::SavedAccountRateLimits::Available(rate_limits) => {
+                crate::status::render_saved_account_rate_limit_summary(
+                    rate_limits,
+                    crate::status::SavedAccountRateLimitSummaryMode::WithResets,
+                )
+            }
+            codex_login::SavedAccountRateLimits::Unsupported { reason } => reason.clone(),
+            codex_login::SavedAccountRateLimits::Unavailable { error } => {
+                format!("failed to load limits: {error}")
+            }
+        }
+    }
+
+    fn display_name(&self) -> String {
+        match (&self.email, self.plan_type) {
+            (Some(email), Some(plan_type)) => {
+                format!(
+                    "{email} ({})",
+                    crate::status::plan_type_display_name(plan_type)
+                )
+            }
+            (Some(email), None) => email.clone(),
+            (None, Some(plan_type)) => {
+                format!(
+                    "{} ({})",
+                    self.summary.label,
+                    crate::status::plan_type_display_name(plan_type)
+                )
+            }
+            (None, None) => self.summary.label.clone(),
+        }
+    }
+}
+
+enum AccountsPopupStatusState {
+    Loading,
+    Loaded,
+    Failed(String),
+}
+
+impl ChatWidget {
+    fn load_accounts_popup_statuses(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let codex_home = self.config.codex_home.clone();
+        let chatgpt_base_url = Some(self.config.chatgpt_base_url.clone());
+        tokio::spawn(async move {
+            let result = codex_login::list_saved_account_statuses(&codex_home, chatgpt_base_url)
+                .await
+                .map_err(|error| error.to_string());
+            tx.send(AppEvent::AccountsPopupStatusesLoaded { result });
+        });
+    }
+
+    fn accounts_popup_params<T: AccountsPopupAccount>(
+        &self,
+        saved_accounts: Vec<T>,
+        state: AccountsPopupStatusState,
+        initial_selected_idx: Option<usize>,
+    ) -> SelectionViewParams {
+        let mut items: Vec<SelectionItem> = saved_accounts
+            .into_iter()
+            .map(|account| account_item(account, &state))
+            .collect();
+
+        items.push(add_account_item(
+            self.config.codex_home.to_path_buf(),
+            self.config.forced_chatgpt_workspace_id.clone(),
+            self.config.forced_login_method,
+            self.config.cli_auth_credentials_store_mode,
+        ));
+
+        SelectionViewParams {
+            view_id: Some(ACCOUNTS_POPUP_VIEW_ID),
+            title: Some("Accounts".to_string()),
+            subtitle: Some(
+                "Switch the active account, remove a saved login, or add another account"
+                    .to_string(),
+            ),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx,
+            ..Default::default()
+        }
+    }
+}
+
+fn account_item<T: AccountsPopupAccount>(
+    account: T,
+    state: &AccountsPopupStatusState,
+) -> SelectionItem {
+    let summary = account.summary();
+    let account_key = summary.key.clone();
+    let mode_label = saved_account_mode_label(summary.auth_mode);
+    let status_description = account.status_description(state);
+    let description = if summary.is_active {
+        format!("Active · {mode_label} · {status_description}")
+    } else {
+        format!("{mode_label} · {status_description}")
+    };
+
+    SelectionItem {
+        name: account.display_name(),
+        description: Some(description),
+        selected_description: summary
+            .is_active
+            .then(|| format!("Currently active account · {mode_label} · {status_description}")),
+        is_current: summary.is_active,
+        actions: vec![Box::new(move |tx| {
+            tx.send(AppEvent::OpenAccountActionsPopup {
+                account_key: account_key.clone(),
+            });
+        })],
+        dismiss_on_select: false,
+        ..Default::default()
     }
 }
 

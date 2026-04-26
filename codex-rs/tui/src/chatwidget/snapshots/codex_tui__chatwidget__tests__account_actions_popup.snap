@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/accounts.rs
+assertion_line: 201
 expression: popup
 ---
   Account
@@ -7,8 +8,8 @@ expression: popup
 
      Switch to API key (...2222) (disabled)  Make this the active account
                                              (disabled: Already active)
-› 2. Remove API key (...2222)                Delete this saved login from /
+› 1. Remove API key (...2222)                Delete this saved login from /
                                              accounts
-  3. Back                                    Return to the accounts list
+  2. Back                                    Return to the accounts list
 
   Press enter to confirm or esc to go back

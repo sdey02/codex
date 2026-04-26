@@ -1,0 +1,15 @@
+---
+source: tui/src/chatwidget/tests/accounts.rs
+expression: popup
+---
+  Accounts
+  Switch the active account, remove a saved login, or add another account
+
+› 1. active@example.com (Pro) (current)  Currently active account · ChatGPT · 5h limit 75% left · weekly
+                                         limit 20% left
+  2. other@example.com (Plus)            ChatGPT · 5h limit 40% left · weekly limit 90% left
+  3. API key (...1111)                   API key · limits unavailable for API key auth
+  4. expired@example.com (Pro)           ChatGPT · failed to load limits: credentials expired
+  5. Add account                         Sign in with another account in your browser
+
+  Press enter to confirm or esc to go back

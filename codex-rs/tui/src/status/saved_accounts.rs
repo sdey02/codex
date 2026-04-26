@@ -87,9 +87,10 @@ fn render_saved_account(account: RenderedSavedAccount<'_>) -> String {
         RenderedSavedAccount::Account(account) => {
             let name = account_display_name(account);
             let detail = match &account.rate_limits {
-                SavedAccountRateLimits::Available(rate_limits) => {
-                    render_rate_limit_summary(rate_limits)
-                }
+                SavedAccountRateLimits::Available(rate_limits) => render_rate_limit_summary(
+                    rate_limits,
+                    SavedAccountRateLimitSummaryMode::Compact,
+                ),
                 SavedAccountRateLimits::Unsupported { reason } => reason.clone(),
                 SavedAccountRateLimits::Unavailable { error } => {
                     format!("failed to load limits: {error}")
@@ -117,8 +118,15 @@ fn account_display_name(account: &SavedAccountStatus) -> String {
     }
 }
 
-fn render_rate_limit_summary(
+#[derive(Clone, Copy)]
+pub(crate) enum SavedAccountRateLimitSummaryMode {
+    Compact,
+    WithResets,
+}
+
+pub(crate) fn render_rate_limit_summary(
     rate_limits: &[codex_protocol::protocol::RateLimitSnapshot],
+    mode: SavedAccountRateLimitSummaryMode,
 ) -> String {
     let now = Local::now();
     let displays: Vec<_> = rate_limits
@@ -138,10 +146,10 @@ fn render_rate_limit_summary(
 
     match compose_rate_limit_data_many(displays.as_slice(), now) {
         StatusRateLimitData::Available(rows) => {
-            render_rate_limit_rows(rows.as_slice(), /*stale*/ false)
+            render_rate_limit_rows(rows.as_slice(), /*stale*/ false, mode)
         }
         StatusRateLimitData::Stale(rows) => {
-            render_rate_limit_rows(rows.as_slice(), /*stale*/ true)
+            render_rate_limit_rows(rows.as_slice(), /*stale*/ true, mode)
         }
         StatusRateLimitData::Unavailable | StatusRateLimitData::Missing => {
             "limits unavailable".to_string()
@@ -149,15 +157,30 @@ fn render_rate_limit_summary(
     }
 }
 
-fn render_rate_limit_rows(rows: &[StatusRateLimitRow], stale: bool) -> String {
+fn render_rate_limit_rows(
+    rows: &[StatusRateLimitRow],
+    stale: bool,
+    mode: SavedAccountRateLimitSummaryMode,
+) -> String {
     let mut parts: Vec<String> = rows
         .iter()
         .filter_map(|row| match &row.value {
-            StatusRateLimitValue::Window { percent_used, .. } => Some(format!(
-                "{} {}",
-                row.label.to_ascii_lowercase(),
-                format_status_limit_summary((100.0 - percent_used).clamp(0.0, 100.0))
-            )),
+            StatusRateLimitValue::Window {
+                percent_used,
+                resets_at,
+            } => {
+                let mut text = format!(
+                    "{} {}",
+                    row.label.to_ascii_lowercase(),
+                    format_status_limit_summary((100.0 - percent_used).clamp(0.0, 100.0))
+                );
+                if matches!(mode, SavedAccountRateLimitSummaryMode::WithResets)
+                    && let Some(resets_at) = resets_at
+                {
+                    text.push_str(format!(", resets {resets_at}").as_str());
+                }
+                Some(text)
+            }
             StatusRateLimitValue::Text(text) if !text.is_empty() => {
                 Some(format!("{} {}", row.label.to_ascii_lowercase(), text))
             }
