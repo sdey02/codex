@@ -710,6 +710,15 @@ impl App {
                         .fail_status_saved_accounts_refresh(request_id, error);
                 }
             },
+            AppEvent::AccountsPopupStatusesLoaded { result } => match result {
+                Ok(saved_accounts) => {
+                    self.chat_widget
+                        .finish_accounts_popup_status_refresh(saved_accounts);
+                }
+                Err(error) => {
+                    self.chat_widget.fail_accounts_popup_status_refresh(error);
+                }
+            },
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
