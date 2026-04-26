@@ -29,6 +29,8 @@ pub(crate) use rate_limits::RateLimitWindowDisplay;
 #[cfg(test)]
 pub(crate) use rate_limits::rate_limit_snapshot_display;
 pub(crate) use rate_limits::rate_limit_snapshot_display_for_limit;
+pub(crate) use saved_accounts::SavedAccountRateLimitSummaryMode;
+pub(crate) use saved_accounts::render_rate_limit_summary as render_saved_account_rate_limit_summary;
 
 #[cfg(test)]
 mod tests;

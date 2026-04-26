@@ -1,6 +1,9 @@
 use super::*;
 use codex_app_server_protocol::AuthMode;
 use codex_login::AuthDotJson;
+use codex_login::SavedAccountRateLimits;
+use codex_login::SavedAccountStatus;
+use codex_login::SavedAccountSummary;
 use pretty_assertions::assert_eq;
 
 fn api_key_auth(api_key: &str) -> AuthDotJson {
@@ -40,6 +43,48 @@ fn saved_account_labels(chat: &ChatWidget) -> Vec<(String, bool)> {
         .collect()
 }
 
+fn saved_status(
+    key: &str,
+    label: &str,
+    auth_mode: AuthMode,
+    is_active: bool,
+    email: Option<&str>,
+    plan_type: Option<codex_protocol::account::PlanType>,
+    rate_limits: SavedAccountRateLimits,
+) -> SavedAccountStatus {
+    SavedAccountStatus {
+        summary: SavedAccountSummary {
+            key: key.to_string(),
+            label: label.to_string(),
+            auth_mode,
+            is_active,
+        },
+        email: email.map(str::to_string),
+        plan_type,
+        rate_limits,
+    }
+}
+
+fn rate_limit_snapshot(primary_percent: f64, secondary_percent: f64) -> RateLimitSnapshot {
+    RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: None,
+        primary: Some(RateLimitWindow {
+            used_percent: primary_percent,
+            window_minutes: Some(300),
+            resets_at: None,
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: secondary_percent,
+            window_minutes: Some(10_080),
+            resets_at: None,
+        }),
+        credits: None,
+        plan_type: Some(codex_protocol::account::PlanType::Pro),
+        rate_limit_reached_type: None,
+    }
+}
+
 fn open_account_actions_from_popup(
     chat: &mut ChatWidget,
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
@@ -74,6 +119,74 @@ async fn accounts_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("accounts_popup", popup);
+}
+
+#[tokio::test]
+async fn accounts_popup_loaded_status_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Accounts);
+    chat.finish_accounts_popup_status_refresh(vec![
+        saved_status(
+            "chatgpt:active",
+            "active@example.com",
+            AuthMode::Chatgpt,
+            /*is_active*/ true,
+            Some("active@example.com"),
+            Some(codex_protocol::account::PlanType::Pro),
+            SavedAccountRateLimits::Available(vec![rate_limit_snapshot(
+                /*primary_percent*/ 25.0, /*secondary_percent*/ 80.0,
+            )]),
+        ),
+        saved_status(
+            "chatgpt:other",
+            "other@example.com",
+            AuthMode::Chatgpt,
+            /*is_active*/ false,
+            Some("other@example.com"),
+            Some(codex_protocol::account::PlanType::Plus),
+            SavedAccountRateLimits::Available(vec![rate_limit_snapshot(
+                /*primary_percent*/ 60.0, /*secondary_percent*/ 10.0,
+            )]),
+        ),
+        saved_status(
+            "api:key",
+            "API key (...1111)",
+            AuthMode::ApiKey,
+            /*is_active*/ false,
+            None,
+            None,
+            SavedAccountRateLimits::Unsupported {
+                reason: "limits unavailable for API key auth".to_string(),
+            },
+        ),
+        saved_status(
+            "chatgpt:expired",
+            "expired@example.com",
+            AuthMode::Chatgpt,
+            /*is_active*/ false,
+            Some("expired@example.com"),
+            Some(codex_protocol::account::PlanType::Pro),
+            SavedAccountRateLimits::Unavailable {
+                error: "credentials expired".to_string(),
+            },
+        ),
+    ]);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 110);
+    assert_chatwidget_snapshot!("accounts_popup_loaded_status", popup);
+}
+
+#[tokio::test]
+async fn accounts_popup_failed_status_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    save_api_key_account(&chat, "sk-test-key-1111");
+
+    chat.dispatch_command(SlashCommand::Accounts);
+    chat.fail_accounts_popup_status_refresh("network unavailable".to_string());
+
+    let popup = render_bottom_popup(&chat, /*width*/ 90);
+    assert_chatwidget_snapshot!("accounts_popup_failed_status", popup);
 }
 
 #[tokio::test]
