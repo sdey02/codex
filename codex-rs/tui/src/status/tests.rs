@@ -27,8 +27,8 @@ use chrono::Duration as ChronoDuration;
 use chrono::Local;
 use chrono::TimeZone;
 use chrono::Utc;
-use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_app_server_protocol::CreditsSnapshot;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
@@ -186,17 +186,18 @@ fn make_saved_account_status(
     }
 }
 
-fn snapshot(percent: f64) -> RateLimitSnapshot {
-    RateLimitSnapshot {
+fn saved_account_snapshot(percent: f64) -> codex_protocol::protocol::RateLimitSnapshot {
+    codex_protocol::protocol::RateLimitSnapshot {
         limit_id: None,
         limit_name: None,
-        primary: Some(RateLimitWindow {
+        primary: Some(codex_protocol::protocol::RateLimitWindow {
             used_percent: percent,
             window_minutes: Some(60),
             resets_at: None,
         }),
         secondary: None,
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }
@@ -2272,10 +2273,12 @@ async fn status_snapshot_includes_other_saved_accounts() {
         .with_ymd_and_hms(2024, 7, 8, 9, 10, 11)
         .single()
         .expect("timestamp");
-    let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let model_slug = get_model_offline_for_tests(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let (composite, handle) = new_status_output_with_rate_limits_handle(
         &config,
+        None,
+        None,
         account_display.as_ref(),
         Some(&token_info),
         &usage,
@@ -2299,7 +2302,7 @@ async fn status_snapshot_includes_other_saved_accounts() {
             /*is_active*/ true,
             Some("active@example.com"),
             Some(PlanType::Pro),
-            SavedAccountRateLimits::Available(vec![snapshot(/*percent*/ 35.0)]),
+            SavedAccountRateLimits::Available(vec![saved_account_snapshot(/*percent*/ 35.0)]),
         ),
         make_saved_account_status(
             "chatgpt:plus",
@@ -2308,7 +2311,7 @@ async fn status_snapshot_includes_other_saved_accounts() {
             /*is_active*/ false,
             Some("plus@example.com"),
             Some(PlanType::Plus),
-            SavedAccountRateLimits::Available(vec![snapshot(/*percent*/ 72.0)]),
+            SavedAccountRateLimits::Available(vec![saved_account_snapshot(/*percent*/ 72.0)]),
         ),
         make_saved_account_status(
             "api:key",

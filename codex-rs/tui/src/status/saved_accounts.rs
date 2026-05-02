@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use chrono::Local;
+use codex_app_server_protocol::RateLimitSnapshot as AppServerRateLimitSnapshot;
 use codex_login::SavedAccountRateLimits;
 use codex_login::SavedAccountStatus;
 use ratatui::prelude::*;
@@ -132,8 +133,9 @@ pub(crate) fn render_rate_limit_summary(
     let displays: Vec<_> = rate_limits
         .iter()
         .map(|snapshot| {
+            let snapshot = AppServerRateLimitSnapshot::from(snapshot.clone());
             rate_limit_snapshot_display_for_limit(
-                snapshot,
+                &snapshot,
                 snapshot
                     .limit_name
                     .clone()
@@ -168,6 +170,7 @@ fn render_rate_limit_rows(
             StatusRateLimitValue::Window {
                 percent_used,
                 resets_at,
+                ..
             } => {
                 let mut text = format!(
                     "{} {}",

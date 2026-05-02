@@ -4,12 +4,16 @@ use codex_login::AuthDotJson;
 use codex_login::SavedAccountRateLimits;
 use codex_login::SavedAccountStatus;
 use codex_login::SavedAccountSummary;
+use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
+use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use pretty_assertions::assert_eq;
 
 fn api_key_auth(api_key: &str) -> AuthDotJson {
     AuthDotJson {
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some(api_key.to_string()),
+        personal_access_token: None,
+        bedrock_api_key: None,
         tokens: None,
         last_refresh: None,
         agent_identity: None,
@@ -21,6 +25,7 @@ fn save_api_key_account(chat: &ChatWidget, api_key: &str) {
         &chat.config.codex_home,
         &api_key_auth(api_key),
         chat.config.cli_auth_credentials_store_mode,
+        chat.config.auth_keyring_backend_kind(),
     )
     .expect("save auth");
 }
@@ -65,21 +70,22 @@ fn saved_status(
     }
 }
 
-fn rate_limit_snapshot(primary_percent: f64, secondary_percent: f64) -> RateLimitSnapshot {
-    RateLimitSnapshot {
+fn rate_limit_snapshot(primary_percent: f64, secondary_percent: f64) -> CoreRateLimitSnapshot {
+    CoreRateLimitSnapshot {
         limit_id: Some("codex".to_string()),
         limit_name: None,
-        primary: Some(RateLimitWindow {
+        primary: Some(CoreRateLimitWindow {
             used_percent: primary_percent,
             window_minutes: Some(300),
             resets_at: None,
         }),
-        secondary: Some(RateLimitWindow {
+        secondary: Some(CoreRateLimitWindow {
             used_percent: secondary_percent,
             window_minutes: Some(10_080),
             resets_at: None,
         }),
         credits: None,
+        individual_limit: None,
         plan_type: Some(codex_protocol::account::PlanType::Pro),
         rate_limit_reached_type: None,
     }
@@ -262,6 +268,7 @@ async fn remove_active_account_restarts_with_replacement() {
     let active_auth = codex_login::load_auth_dot_json(
         &chat.config.codex_home,
         chat.config.cli_auth_credentials_store_mode,
+        chat.config.auth_keyring_backend_kind(),
     )
     .expect("load auth")
     .expect("active auth");
@@ -294,6 +301,7 @@ async fn remove_last_active_account_restarts_logged_out() {
         codex_login::load_auth_dot_json(
             &chat.config.codex_home,
             chat.config.cli_auth_credentials_store_mode,
+            chat.config.auth_keyring_backend_kind(),
         )
         .expect("load auth"),
         None

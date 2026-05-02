@@ -273,7 +273,6 @@ pub enum RemoveSavedAccountResult {
     },
 }
 
-#[async_trait]
 /// Pluggable auth provider used by `AuthManager` for externally managed auth flows.
 ///
 /// Implementations own the current auth value and any source-specific refresh mechanism.
@@ -1179,7 +1178,11 @@ pub fn switch_active_account(
     account_key: &str,
 ) -> std::io::Result<()> {
     if auth_credentials_store_mode != AuthCredentialsStoreMode::Ephemeral {
-        let _ = logout(codex_home, AuthCredentialsStoreMode::Ephemeral)?;
+        let _ = logout(
+            codex_home,
+            AuthCredentialsStoreMode::Ephemeral,
+            AuthKeyringBackendKind::default(),
+        )?;
     }
     let auth = switch_saved_account(codex_home, account_key)?;
     save_auth(
@@ -1207,7 +1210,11 @@ pub fn remove_saved_account(
             replacement_auth,
         } => {
             if auth_credentials_store_mode != AuthCredentialsStoreMode::Ephemeral {
-                let _ = logout(codex_home, AuthCredentialsStoreMode::Ephemeral)?;
+                let _ = logout(
+                    codex_home,
+                    AuthCredentialsStoreMode::Ephemeral,
+                    AuthKeyringBackendKind::default(),
+                )?;
             }
             save_auth(
                 codex_home,
@@ -1221,7 +1228,11 @@ pub fn remove_saved_account(
             })
         }
         RemoveSavedAccountResultInternal::LastActive { removed } => {
-            let _ = logout_all_stores(codex_home, auth_credentials_store_mode)?;
+            let _ = logout_all_stores(
+                codex_home,
+                auth_credentials_store_mode,
+                AuthKeyringBackendKind::default(),
+            )?;
             Ok(RemoveSavedAccountResult::RemovedLastActive {
                 removed_label: removed.label,
             })

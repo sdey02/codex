@@ -1012,6 +1012,9 @@ pub(crate) enum AppEvent {
         result: Result<Vec<ModelPreset>, String>,
     },
 
+    /// Dismiss all stacked bottom-pane views/popups.
+    DismissBottomPaneViews,
+
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,

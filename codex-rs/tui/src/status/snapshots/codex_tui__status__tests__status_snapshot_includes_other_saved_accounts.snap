@@ -12,13 +12,13 @@ expression: sanitized
 │                                                                                        │
 │  Model:            gpt-5.1-codex-max (reasoning none, summaries auto)                  │
 │  Directory: [[workspace]]                                                              │
-│  Permissions:      Custom (read-only, on-request)                                      │
+│  Permissions:      Custom (custom permissions with network access, Ask for approval)   │
 │  Agents.md:        <none>                                                              │
 │  Account:          active@example.com (Pro)                                            │
 │                                                                                        │
 │  Context window:   100% left (1.2K used / 272K)                                        │
 │  Limits:           data not available yet                                              │
-│  Other accounts:   plus@example.com (Plus) · 1h limit 28% left                         │
+│  Other accounts:   plus@example.com (Plus) · usage limit 28% left                      │
 │                    API key (...9999) · limits unavailable for API key auth             │
 │                    error@example.com (Free) · failed to load limits: request timed out │
 ╰────────────────────────────────────────────────────────────────────────────────────────╯

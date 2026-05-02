@@ -6,6 +6,11 @@ use super::*;
 const ACCOUNTS_POPUP_VIEW_ID: &str = "accounts-popup";
 
 impl ChatWidget {
+    pub(crate) fn dismiss_bottom_pane_views(&mut self) {
+        self.bottom_pane.clear_selection_views();
+        self.request_redraw();
+    }
+
     pub(crate) fn open_accounts_popup(&mut self) {
         let saved_accounts = match codex_login::list_saved_accounts(&self.config.codex_home) {
             Ok(accounts) => accounts,
@@ -358,6 +363,8 @@ impl ChatWidget {
             self.config.forced_chatgpt_workspace_id.clone(),
             self.config.forced_login_method,
             self.config.cli_auth_credentials_store_mode,
+            self.config.auth_keyring_backend_kind(),
+            self.config.auth_route_config(),
         ));
 
         SelectionViewParams {
@@ -408,9 +415,11 @@ fn account_item<T: AccountsPopupAccount>(
 
 fn add_account_item(
     codex_home: PathBuf,
-    forced_chatgpt_workspace_id: Option<String>,
+    forced_chatgpt_workspace_id: Option<Vec<String>>,
     forced_login_method: Option<ForcedLoginMethod>,
     credentials_store_mode: codex_login::AuthCredentialsStoreMode,
+    keyring_backend_kind: codex_login::AuthKeyringBackendKind,
+    auth_route_config: Option<codex_login::AuthRouteConfig>,
 ) -> SelectionItem {
     let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
         if matches!(forced_login_method, Some(ForcedLoginMethod::Api)) {
@@ -433,12 +442,15 @@ fn add_account_item(
         let tx = tx.clone();
         let codex_home = codex_home.clone();
         let forced_chatgpt_workspace_id = forced_chatgpt_workspace_id.clone();
+        let auth_route_config = auth_route_config.clone();
         tokio::spawn(async move {
             let opts = codex_login::ServerOptions::new(
                 codex_home,
                 codex_login::CLIENT_ID.to_string(),
                 forced_chatgpt_workspace_id,
                 credentials_store_mode,
+                keyring_backend_kind,
+                auth_route_config,
             );
             let result = match codex_login::run_login_server(opts) {
                 Ok(server) => server.block_until_done().await,
@@ -477,5 +489,7 @@ fn saved_account_mode_label(auth_mode: ApiAuthMode) -> &'static str {
         ApiAuthMode::Chatgpt => "ChatGPT",
         ApiAuthMode::ChatgptAuthTokens => "ChatGPT (external)",
         ApiAuthMode::AgentIdentity => "Agent identity",
+        ApiAuthMode::PersonalAccessToken => "Personal access token",
+        ApiAuthMode::BedrockApiKey => "Bedrock API key",
     }
 }

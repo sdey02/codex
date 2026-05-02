@@ -39,6 +39,7 @@ use tokio::time::timeout;
 
 use super::manager::CLIENT_ID;
 use super::manager::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use super::storage::AgentIdentityAuthRecord;
 use super::storage::AuthDotJson;
 use crate::auth::default_client::build_reqwest_client;
 use crate::auth::default_client::get_codex_user_agent;
@@ -221,6 +222,26 @@ pub async fn list_saved_account_statuses(
                     },
                 });
             }
+            ApiAuthMode::PersonalAccessToken => {
+                statuses[index] = Some(SavedAccountStatus {
+                    summary,
+                    email,
+                    plan_type,
+                    rate_limits: SavedAccountRateLimits::Unsupported {
+                        reason: "limits unavailable for personal access token auth".to_string(),
+                    },
+                });
+            }
+            ApiAuthMode::BedrockApiKey => {
+                statuses[index] = Some(SavedAccountStatus {
+                    summary,
+                    email,
+                    plan_type,
+                    rate_limits: SavedAccountRateLimits::Unsupported {
+                        reason: "limits unavailable for Bedrock API key auth".to_string(),
+                    },
+                });
+            }
             ApiAuthMode::Chatgpt | ApiAuthMode::ChatgptAuthTokens => {
                 let entry = entry.clone();
                 let base_url = chatgpt_base_url.clone();
@@ -397,12 +418,42 @@ fn account_identity(
             ))
         }
         ApiAuthMode::AgentIdentity => {
-            let Some(record) = auth.agent_identity.as_ref() else {
+            let Some(record) = agent_identity_record(auth) else {
                 return Err(std::io::Error::other(
                     "agent identity auth is missing account data",
                 ));
             };
-            Ok((format!("agent:{}", record.account_id), record.email.clone()))
+            let label = record
+                .email
+                .clone()
+                .unwrap_or_else(|| record.account_id.clone());
+            Ok((format!("agent:{}", record.account_id), label))
+        }
+        ApiAuthMode::PersonalAccessToken => {
+            let Some(token) = auth.personal_access_token.as_ref() else {
+                return Err(std::io::Error::other(
+                    "personal access token auth is missing token material",
+                ));
+            };
+            Ok((
+                format!("pat:{}", short_hash(token.as_bytes())),
+                "Personal access token".to_string(),
+            ))
+        }
+        ApiAuthMode::BedrockApiKey => {
+            let Some(bedrock) = auth.bedrock_api_key.as_ref() else {
+                return Err(std::io::Error::other(
+                    "Bedrock API key auth is missing key material",
+                ));
+            };
+            Ok((
+                format!(
+                    "bedrock:{}:{}",
+                    bedrock.region,
+                    short_hash(bedrock.api_key.as_bytes())
+                ),
+                format!("Bedrock API key ({})", bedrock.region),
+            ))
         }
         ApiAuthMode::Chatgpt | ApiAuthMode::ChatgptAuthTokens => {
             let account_id = auth
@@ -438,9 +489,8 @@ fn account_identity(
 }
 
 fn account_email(auth: &AuthDotJson) -> Option<String> {
-    auth.agent_identity
-        .as_ref()
-        .map(|record| record.email.clone())
+    agent_identity_record(auth)
+        .and_then(|record| record.email)
         .or_else(|| {
             auth.tokens
                 .as_ref()
@@ -449,7 +499,7 @@ fn account_email(auth: &AuthDotJson) -> Option<String> {
 }
 
 fn account_plan_type(auth: &AuthDotJson) -> Option<AccountPlanType> {
-    if let Some(record) = auth.agent_identity.as_ref() {
+    if let Some(record) = agent_identity_record(auth) {
         return Some(record.plan_type);
     }
 
@@ -477,6 +527,15 @@ fn map_internal_plan_type(plan_type: &InternalPlanType) -> AccountPlanType {
             InternalKnownPlan::Edu => AccountPlanType::Edu,
         },
         InternalPlanType::Unknown(_) => AccountPlanType::Unknown,
+    }
+}
+
+fn agent_identity_record(auth: &AuthDotJson) -> Option<AgentIdentityAuthRecord> {
+    match auth.agent_identity.as_ref()? {
+        super::storage::AgentIdentityStorage::Jwt(jwt) => {
+            AgentIdentityAuthRecord::from_agent_identity_jwt(jwt).ok()
+        }
+        super::storage::AgentIdentityStorage::Record(record) => Some(record.clone()),
     }
 }
 
@@ -767,8 +826,8 @@ fn usage_headers(auth: &AuthDotJson, tokens: &TokenData) -> HeaderMap {
     if let Ok(authorization) = HeaderValue::from_str(&format!("Bearer {}", tokens.access_token)) {
         headers.insert(AUTHORIZATION, authorization);
     }
-    let account_id = auth
-        .agent_identity
+    let agent_identity = agent_identity_record(auth);
+    let account_id = agent_identity
         .as_ref()
         .map(|record| record.account_id.as_str())
         .or(tokens.account_id.as_deref())
@@ -779,8 +838,7 @@ fn usage_headers(auth: &AuthDotJson, tokens: &TokenData) -> HeaderMap {
     {
         headers.insert(name, value);
     }
-    let is_fedramp = auth
-        .agent_identity
+    let is_fedramp = agent_identity
         .as_ref()
         .is_some_and(|record| record.chatgpt_account_is_fedramp)
         || tokens.id_token.is_fedramp_account();
@@ -865,6 +923,7 @@ fn make_rate_limit_snapshot(
         primary,
         secondary,
         credits: map_credits(credits),
+        individual_limit: None,
         plan_type,
         rate_limit_reached_type,
     }
@@ -936,6 +995,8 @@ mod tests {
             tokens: None,
             last_refresh: None,
             agent_identity: None,
+            personal_access_token: None,
+            bedrock_api_key: None,
         }
     }
 
@@ -961,6 +1022,8 @@ mod tests {
             }),
             last_refresh: Some(Utc::now()),
             agent_identity: None,
+            personal_access_token: None,
+            bedrock_api_key: None,
         }
     }
 
