@@ -4,6 +4,8 @@ use codex_login::AuthDotJson;
 use codex_login::SavedAccountRateLimits;
 use codex_login::SavedAccountStatus;
 use codex_login::SavedAccountSummary;
+use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
+use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use pretty_assertions::assert_eq;
 
 fn api_key_auth(api_key: &str) -> AuthDotJson {
@@ -65,16 +67,16 @@ fn saved_status(
     }
 }
 
-fn rate_limit_snapshot(primary_percent: f64, secondary_percent: f64) -> RateLimitSnapshot {
-    RateLimitSnapshot {
+fn rate_limit_snapshot(primary_percent: f64, secondary_percent: f64) -> CoreRateLimitSnapshot {
+    CoreRateLimitSnapshot {
         limit_id: Some("codex".to_string()),
         limit_name: None,
-        primary: Some(RateLimitWindow {
+        primary: Some(CoreRateLimitWindow {
             used_percent: primary_percent,
             window_minutes: Some(300),
             resets_at: None,
         }),
-        secondary: Some(RateLimitWindow {
+        secondary: Some(CoreRateLimitWindow {
             used_percent: secondary_percent,
             window_minutes: Some(10_080),
             resets_at: None,

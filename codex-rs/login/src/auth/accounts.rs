@@ -39,6 +39,7 @@ use tokio::time::timeout;
 
 use super::manager::CLIENT_ID;
 use super::manager::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use super::storage::AgentIdentityAuthRecord;
 use super::storage::AuthDotJson;
 use crate::auth::default_client::build_reqwest_client;
 use crate::auth::default_client::get_codex_user_agent;
@@ -397,12 +398,13 @@ fn account_identity(
             ))
         }
         ApiAuthMode::AgentIdentity => {
-            let Some(record) = auth.agent_identity.as_ref() else {
+            let Some(jwt) = auth.agent_identity.as_deref() else {
                 return Err(std::io::Error::other(
                     "agent identity auth is missing account data",
                 ));
             };
-            Ok((format!("agent:{}", record.account_id), record.email.clone()))
+            let record = AgentIdentityAuthRecord::from_agent_identity_jwt(jwt)?;
+            Ok((format!("agent:{}", record.account_id), record.email))
         }
         ApiAuthMode::Chatgpt | ApiAuthMode::ChatgptAuthTokens => {
             let account_id = auth
@@ -438,9 +440,8 @@ fn account_identity(
 }
 
 fn account_email(auth: &AuthDotJson) -> Option<String> {
-    auth.agent_identity
-        .as_ref()
-        .map(|record| record.email.clone())
+    agent_identity_record(auth)
+        .map(|record| record.email)
         .or_else(|| {
             auth.tokens
                 .as_ref()
@@ -449,7 +450,7 @@ fn account_email(auth: &AuthDotJson) -> Option<String> {
 }
 
 fn account_plan_type(auth: &AuthDotJson) -> Option<AccountPlanType> {
-    if let Some(record) = auth.agent_identity.as_ref() {
+    if let Some(record) = agent_identity_record(auth) {
         return Some(record.plan_type);
     }
 
@@ -478,6 +479,12 @@ fn map_internal_plan_type(plan_type: &InternalPlanType) -> AccountPlanType {
         },
         InternalPlanType::Unknown(_) => AccountPlanType::Unknown,
     }
+}
+
+fn agent_identity_record(auth: &AuthDotJson) -> Option<AgentIdentityAuthRecord> {
+    auth.agent_identity
+        .as_deref()
+        .and_then(|jwt| AgentIdentityAuthRecord::from_agent_identity_jwt(jwt).ok())
 }
 
 fn map_backend_plan_type(plan_type: BackendPlanType) -> AccountPlanType {
@@ -767,8 +774,8 @@ fn usage_headers(auth: &AuthDotJson, tokens: &TokenData) -> HeaderMap {
     if let Ok(authorization) = HeaderValue::from_str(&format!("Bearer {}", tokens.access_token)) {
         headers.insert(AUTHORIZATION, authorization);
     }
-    let account_id = auth
-        .agent_identity
+    let agent_identity = agent_identity_record(auth);
+    let account_id = agent_identity
         .as_ref()
         .map(|record| record.account_id.as_str())
         .or(tokens.account_id.as_deref())
@@ -779,8 +786,7 @@ fn usage_headers(auth: &AuthDotJson, tokens: &TokenData) -> HeaderMap {
     {
         headers.insert(name, value);
     }
-    let is_fedramp = auth
-        .agent_identity
+    let is_fedramp = agent_identity
         .as_ref()
         .is_some_and(|record| record.chatgpt_account_is_fedramp)
         || tokens.id_token.is_fedramp_account();

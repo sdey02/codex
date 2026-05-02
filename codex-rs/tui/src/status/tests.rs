@@ -13,8 +13,8 @@ use crate::token_usage::TokenUsageInfo;
 use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
 use chrono::Utc;
-use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_app_server_protocol::CreditsSnapshot;
 use codex_app_server_protocol::FileSystemAccessMode;
 use codex_app_server_protocol::FileSystemPath;
@@ -124,11 +124,11 @@ fn make_saved_account_status(
     }
 }
 
-fn snapshot(percent: f64) -> RateLimitSnapshot {
-    RateLimitSnapshot {
+fn saved_account_snapshot(percent: f64) -> codex_protocol::protocol::RateLimitSnapshot {
+    codex_protocol::protocol::RateLimitSnapshot {
         limit_id: None,
         limit_name: None,
-        primary: Some(RateLimitWindow {
+        primary: Some(codex_protocol::protocol::RateLimitWindow {
             used_percent: percent,
             window_minutes: Some(60),
             resets_at: None,
@@ -1714,6 +1714,7 @@ async fn status_snapshot_includes_other_saved_accounts() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let (composite, handle) = new_status_output_with_rate_limits_handle(
         &config,
+        None,
         account_display.as_ref(),
         Some(&token_info),
         &usage,
@@ -1737,7 +1738,7 @@ async fn status_snapshot_includes_other_saved_accounts() {
             /*is_active*/ true,
             Some("active@example.com"),
             Some(PlanType::Pro),
-            SavedAccountRateLimits::Available(vec![snapshot(/*percent*/ 35.0)]),
+            SavedAccountRateLimits::Available(vec![saved_account_snapshot(/*percent*/ 35.0)]),
         ),
         make_saved_account_status(
             "chatgpt:plus",
@@ -1746,7 +1747,7 @@ async fn status_snapshot_includes_other_saved_accounts() {
             /*is_active*/ false,
             Some("plus@example.com"),
             Some(PlanType::Plus),
-            SavedAccountRateLimits::Available(vec![snapshot(/*percent*/ 72.0)]),
+            SavedAccountRateLimits::Available(vec![saved_account_snapshot(/*percent*/ 72.0)]),
         ),
         make_saved_account_status(
             "api:key",
