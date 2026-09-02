@@ -198,6 +198,7 @@ fn saved_account_snapshot(percent: f64) -> codex_protocol::protocol::RateLimitSn
         secondary: None,
         credits: None,
         individual_limit: None,
+        spend_control_reached: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }
@@ -2277,6 +2278,7 @@ async fn status_snapshot_includes_other_saved_accounts() {
     let token_info = token_info_for(&model_slug, &config, &usage);
     let (composite, handle) = new_status_output_with_rate_limits_handle(
         &config,
+        /*requires_openai_auth*/ true,
         None,
         None,
         account_display.as_ref(),

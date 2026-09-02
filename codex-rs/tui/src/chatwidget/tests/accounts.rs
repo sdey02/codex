@@ -10,10 +10,11 @@ use pretty_assertions::assert_eq;
 
 fn api_key_auth(api_key: &str) -> AuthDotJson {
     AuthDotJson {
-        auth_mode: Some(AuthMode::ApiKey),
+        auth_mode: Some(codex_protocol::auth::AuthMode::ApiKey),
         openai_api_key: Some(api_key.to_string()),
         personal_access_token: None,
         bedrock_api_key: None,
+        bedrock_access_keys: None,
         tokens: None,
         last_refresh: None,
         agent_identity: None,
@@ -86,6 +87,7 @@ fn rate_limit_snapshot(primary_percent: f64, secondary_percent: f64) -> CoreRate
         }),
         credits: None,
         individual_limit: None,
+        spend_control_reached: None,
         plan_type: Some(codex_protocol::account::PlanType::Pro),
         rate_limit_reached_type: None,
     }

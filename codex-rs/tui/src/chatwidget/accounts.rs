@@ -419,7 +419,7 @@ fn add_account_item(
     forced_login_method: Option<ForcedLoginMethod>,
     credentials_store_mode: codex_login::AuthCredentialsStoreMode,
     keyring_backend_kind: codex_login::AuthKeyringBackendKind,
-    auth_route_config: Option<codex_login::AuthRouteConfig>,
+    auth_route_config: codex_login::AuthRouteConfig,
 ) -> SelectionItem {
     let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
         if matches!(forced_login_method, Some(ForcedLoginMethod::Api)) {
@@ -488,8 +488,10 @@ fn saved_account_mode_label(auth_mode: ApiAuthMode) -> &'static str {
         ApiAuthMode::ApiKey => "API key",
         ApiAuthMode::Chatgpt => "ChatGPT",
         ApiAuthMode::ChatgptAuthTokens => "ChatGPT (external)",
+        ApiAuthMode::Headers => "Headers",
         ApiAuthMode::AgentIdentity => "Agent identity",
         ApiAuthMode::PersonalAccessToken => "Personal access token",
         ApiAuthMode::BedrockApiKey => "Bedrock API key",
+        ApiAuthMode::BedrockAccessKeys => "Bedrock access keys",
     }
 }

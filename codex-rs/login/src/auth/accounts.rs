@@ -16,20 +16,25 @@ use codex_backend_openapi_models::models::RateLimitReachedKind as BackendRateLim
 use codex_backend_openapi_models::models::RateLimitStatusDetails;
 use codex_backend_openapi_models::models::RateLimitStatusPayload;
 use codex_backend_openapi_models::models::RateLimitWindowSnapshot;
+use codex_backend_openapi_models::models::SpendControlLimitDetails;
+use codex_backend_openapi_models::models::SpendControlStatusDetails;
+use codex_http_client::HttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
+use codex_protocol::auth::AuthMode as InternalAuthMode;
 use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
-use reqwest::StatusCode;
-use reqwest::header::AUTHORIZATION;
-use reqwest::header::CONTENT_TYPE;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
-use reqwest::header::USER_AGENT;
+use codex_protocol::protocol::SpendControlLimitSnapshot;
+use http::StatusCode;
+use http::header::AUTHORIZATION;
+use http::header::CONTENT_TYPE;
+use http::header::HeaderMap;
+use http::header::HeaderName;
+use http::header::HeaderValue;
+use http::header::USER_AGENT;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
@@ -41,7 +46,7 @@ use super::manager::CLIENT_ID;
 use super::manager::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use super::storage::AgentIdentityAuthRecord;
 use super::storage::AuthDotJson;
-use crate::auth::default_client::build_reqwest_client;
+use crate::auth::default_client::create_client;
 use crate::auth::default_client::get_codex_user_agent;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
@@ -152,7 +157,10 @@ const fn saved_accounts_file_version() -> u8 {
 
 pub(super) fn upsert_saved_account(codex_home: &Path, auth: &AuthDotJson) -> std::io::Result<()> {
     let auth_mode = resolved_auth_mode(auth);
-    if auth_mode == ApiAuthMode::ChatgptAuthTokens {
+    if matches!(
+        auth_mode,
+        ApiAuthMode::ChatgptAuthTokens | ApiAuthMode::Headers | ApiAuthMode::BedrockAccessKeys
+    ) {
         return Ok(());
     }
 
@@ -194,7 +202,7 @@ pub async fn list_saved_account_statuses(
 
     let mut statuses: Vec<Option<SavedAccountStatus>> = vec![None; ordered.len()];
     let mut join_set: JoinSet<(usize, FetchedSavedAccountStatus)> = JoinSet::new();
-    let http = build_reqwest_client();
+    let http = create_client();
 
     for (index, entry) in ordered.iter().enumerate() {
         let summary = summary_from_entry(entry, saved.active_account_key.as_deref());
@@ -239,6 +247,16 @@ pub async fn list_saved_account_statuses(
                     plan_type,
                     rate_limits: SavedAccountRateLimits::Unsupported {
                         reason: "limits unavailable for Bedrock API key auth".to_string(),
+                    },
+                });
+            }
+            ApiAuthMode::Headers | ApiAuthMode::BedrockAccessKeys => {
+                statuses[index] = Some(SavedAccountStatus {
+                    summary,
+                    email,
+                    plan_type,
+                    rate_limits: SavedAccountRateLimits::Unsupported {
+                        reason: "limits unavailable for this auth mode".to_string(),
                     },
                 });
             }
@@ -382,7 +400,7 @@ pub(super) fn remove_saved_account(
 
 fn resolved_auth_mode(auth: &AuthDotJson) -> ApiAuthMode {
     if let Some(mode) = auth.auth_mode {
-        return mode;
+        return map_internal_auth_mode(mode);
     }
     if auth.openai_api_key.is_some() {
         return ApiAuthMode::ApiKey;
@@ -391,6 +409,19 @@ fn resolved_auth_mode(auth: &AuthDotJson) -> ApiAuthMode {
         return ApiAuthMode::AgentIdentity;
     }
     ApiAuthMode::Chatgpt
+}
+
+fn map_internal_auth_mode(auth_mode: InternalAuthMode) -> ApiAuthMode {
+    match auth_mode {
+        InternalAuthMode::ApiKey => ApiAuthMode::ApiKey,
+        InternalAuthMode::Chatgpt => ApiAuthMode::Chatgpt,
+        InternalAuthMode::ChatgptAuthTokens => ApiAuthMode::ChatgptAuthTokens,
+        InternalAuthMode::Headers => ApiAuthMode::Headers,
+        InternalAuthMode::AgentIdentity => ApiAuthMode::AgentIdentity,
+        InternalAuthMode::PersonalAccessToken => ApiAuthMode::PersonalAccessToken,
+        InternalAuthMode::BedrockApiKey => ApiAuthMode::BedrockApiKey,
+        InternalAuthMode::BedrockAccessKeys => ApiAuthMode::BedrockAccessKeys,
+    }
 }
 
 fn account_identity(
@@ -485,6 +516,9 @@ fn account_identity(
                 .unwrap_or_else(|| "ChatGPT account".to_string());
             Ok((key, label))
         }
+        ApiAuthMode::Headers | ApiAuthMode::BedrockAccessKeys => Err(std::io::Error::other(
+            "auth mode is not supported for saved accounts",
+        )),
     }
 }
 
@@ -518,13 +552,20 @@ fn map_internal_plan_type(plan_type: &InternalPlanType) -> AccountPlanType {
             InternalKnownPlan::Pro => AccountPlanType::Pro,
             InternalKnownPlan::ProLite => AccountPlanType::ProLite,
             InternalKnownPlan::Team => AccountPlanType::Team,
+            InternalKnownPlan::SelfServeBusinessProLite => {
+                AccountPlanType::SelfServeBusinessProLite
+            }
             InternalKnownPlan::SelfServeBusinessUsageBased => {
                 AccountPlanType::SelfServeBusinessUsageBased
             }
             InternalKnownPlan::Business => AccountPlanType::Business,
+            InternalKnownPlan::Ent26 => AccountPlanType::Ent26,
+            InternalKnownPlan::EnterpriseCbpAutomation => AccountPlanType::EnterpriseCbpAutomation,
             InternalKnownPlan::EnterpriseCbpUsageBased => AccountPlanType::EnterpriseCbpUsageBased,
             InternalKnownPlan::Enterprise => AccountPlanType::Enterprise,
             InternalKnownPlan::Edu => AccountPlanType::Edu,
+            InternalKnownPlan::EduPlus => AccountPlanType::EduPlus,
+            InternalKnownPlan::EduPro => AccountPlanType::EduPro,
         },
         InternalPlanType::Unknown(_) => AccountPlanType::Unknown,
     }
@@ -541,24 +582,29 @@ fn agent_identity_record(auth: &AuthDotJson) -> Option<AgentIdentityAuthRecord> 
 
 fn map_backend_plan_type(plan_type: BackendPlanType) -> AccountPlanType {
     match plan_type {
-        BackendPlanType::Guest | BackendPlanType::Free | BackendPlanType::FreeWorkspace => {
-            AccountPlanType::Free
-        }
+        BackendPlanType::Free => AccountPlanType::Free,
         BackendPlanType::Go => AccountPlanType::Go,
         BackendPlanType::Plus => AccountPlanType::Plus,
         BackendPlanType::Pro => AccountPlanType::Pro,
         BackendPlanType::ProLite => AccountPlanType::ProLite,
         BackendPlanType::Team => AccountPlanType::Team,
+        BackendPlanType::SelfServeBusinessProLite => AccountPlanType::SelfServeBusinessProLite,
         BackendPlanType::SelfServeBusinessUsageBased => {
             AccountPlanType::SelfServeBusinessUsageBased
         }
         BackendPlanType::Business => AccountPlanType::Business,
+        BackendPlanType::Ent26 => AccountPlanType::Ent26,
+        BackendPlanType::EnterpriseCbpAutomation => AccountPlanType::EnterpriseCbpAutomation,
         BackendPlanType::EnterpriseCbpUsageBased => AccountPlanType::EnterpriseCbpUsageBased,
         BackendPlanType::Enterprise => AccountPlanType::Enterprise,
         BackendPlanType::Education | BackendPlanType::Edu => AccountPlanType::Edu,
-        BackendPlanType::Quorum | BackendPlanType::K12 | BackendPlanType::Unknown => {
-            AccountPlanType::Unknown
-        }
+        BackendPlanType::EduPlus => AccountPlanType::EduPlus,
+        BackendPlanType::EduPro => AccountPlanType::EduPro,
+        BackendPlanType::Guest
+        | BackendPlanType::FreeWorkspace
+        | BackendPlanType::Quorum
+        | BackendPlanType::K12
+        | BackendPlanType::Unknown => AccountPlanType::Unknown,
     }
 }
 
@@ -646,7 +692,7 @@ fn accounts_file_path(codex_home: &Path) -> PathBuf {
 }
 
 async fn fetch_saved_chatgpt_status(
-    http: reqwest::Client,
+    http: HttpClient,
     entry: SavedAccountEntry,
     chatgpt_base_url: Option<String>,
     summary: SavedAccountSummary,
@@ -689,7 +735,7 @@ async fn fetch_saved_chatgpt_status(
 }
 
 async fn fetch_saved_chatgpt_rate_limits(
-    http: &reqwest::Client,
+    http: &HttpClient,
     auth: &mut AuthDotJson,
     chatgpt_base_url: Option<String>,
 ) -> Result<Vec<RateLimitSnapshot>, String> {
@@ -727,7 +773,7 @@ fn should_refresh_proactively(auth: &AuthDotJson) -> bool {
 }
 
 async fn refresh_saved_chatgpt_auth(
-    http: &reqwest::Client,
+    http: &HttpClient,
     auth: &mut AuthDotJson,
 ) -> Result<(), String> {
     let Some(tokens) = auth.tokens.as_mut() else {
@@ -776,7 +822,7 @@ async fn refresh_saved_chatgpt_auth(
 }
 
 async fn request_usage_payload(
-    http: &reqwest::Client,
+    http: &HttpClient,
     auth: &AuthDotJson,
     chatgpt_base_url: Option<&str>,
 ) -> Result<RateLimitStatusPayload, UsageFetchError> {
@@ -884,6 +930,7 @@ fn rate_limit_snapshots_from_payload(payload: RateLimitStatusPayload) -> Vec<Rat
         /*limit_name*/ None,
         payload.rate_limit.flatten().map(|details| *details),
         payload.credits.flatten().map(|details| *details),
+        payload.spend_control.flatten().map(|details| *details),
         plan_type,
         rate_limit_reached_type,
     )];
@@ -894,6 +941,7 @@ fn rate_limit_snapshots_from_payload(payload: RateLimitStatusPayload) -> Vec<Rat
                 Some(details.limit_name),
                 details.rate_limit.flatten().map(|rate_limit| *rate_limit),
                 /*credits*/ None,
+                /*spend_control*/ None,
                 plan_type,
                 /*rate_limit_reached_type*/ None,
             )
@@ -907,6 +955,7 @@ fn make_rate_limit_snapshot(
     limit_name: Option<String>,
     rate_limit: Option<RateLimitStatusDetails>,
     credits: Option<CreditStatusDetails>,
+    spend_control: Option<SpendControlStatusDetails>,
     plan_type: Option<AccountPlanType>,
     rate_limit_reached_type: Option<RateLimitReachedType>,
 ) -> RateLimitSnapshot {
@@ -917,15 +966,29 @@ fn make_rate_limit_snapshot(
         ),
         None => (None, None),
     };
+    let spend_control_reached = spend_control.as_ref().map(|details| details.reached);
+    let individual_limit = spend_control
+        .and_then(|details| details.individual_limit.flatten())
+        .map(|details| map_individual_limit(*details));
     RateLimitSnapshot {
         limit_id,
         limit_name,
         primary,
         secondary,
         credits: map_credits(credits),
-        individual_limit: None,
+        individual_limit,
+        spend_control_reached,
         plan_type,
         rate_limit_reached_type,
+    }
+}
+
+fn map_individual_limit(details: SpendControlLimitDetails) -> SpendControlLimitSnapshot {
+    SpendControlLimitSnapshot {
+        limit: details.limit,
+        used: details.used,
+        remaining_percent: details.remaining_percent,
+        resets_at: i64::from(details.reset_at),
     }
 }
 
@@ -990,13 +1053,14 @@ mod tests {
 
     fn api_key_auth(api_key: &str) -> AuthDotJson {
         AuthDotJson {
-            auth_mode: Some(ApiAuthMode::ApiKey),
+            auth_mode: Some(InternalAuthMode::ApiKey),
             openai_api_key: Some(api_key.to_string()),
             tokens: None,
             last_refresh: None,
             agent_identity: None,
             personal_access_token: None,
             bedrock_api_key: None,
+            bedrock_access_keys: None,
         }
     }
 
@@ -1012,7 +1076,7 @@ mod tests {
             crate::token_data::parse_chatgpt_jwt_claims(&id_token).expect("valid fake jwt");
 
         AuthDotJson {
-            auth_mode: Some(ApiAuthMode::Chatgpt),
+            auth_mode: Some(InternalAuthMode::Chatgpt),
             openai_api_key: None,
             tokens: Some(TokenData {
                 id_token: parsed_id_token,
@@ -1024,6 +1088,7 @@ mod tests {
             agent_identity: None,
             personal_access_token: None,
             bedrock_api_key: None,
+            bedrock_access_keys: None,
         }
     }
 
